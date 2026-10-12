@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Java / Maven
+target/
+*.class
+*.log
+
+# Node
+node_modules/
+dist/
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
