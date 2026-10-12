@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -31,11 +33,13 @@ public class OrderService {
     // ponytail: if Kafka is down after the commit, the order stays PENDING with no event (dual-write problem,
     // explored in Phase 6; transactional outbox is the fix).
     public OrderResponse create(CreateOrderRequest request) {
-        Order order = new Order(request.customerId());
+        // The event id is chosen up front so the PENDING history entry can point at the event that announces it.
+        UUID eventId = UUID.randomUUID();
+        Order order = new Order(request.customerId(), eventId);
         request.items().forEach(item -> order.addItem(item.sku(), item.quantity()));
         orders.save(order);
 
-        var event = EventEnvelope.of(ORDER_CREATED, order.getId(), OrderCreatedPayload.from(order));
+        var event = new EventEnvelope<>(eventId, ORDER_CREATED, order.getCreatedAt(), order.getId(), OrderPayload.from(order));
         // Key = orderId: every event of this order goes to the same partition, so they stay in order.
         kafka.send(ORDER_CREATED, order.getId().toString(), event).whenComplete((result, ex) -> {
             if (ex != null) {
@@ -50,13 +54,22 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public OrderResponse get(UUID id) {
-        return orders.findById(id)
-                .map(OrderResponse::from)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order " + id + " not found"));
+        return OrderResponse.from(find(id));
     }
 
     @Transactional(readOnly = true)
-    public List<OrderResponse> findByStatus(OrderStatus status) {
-        return orders.findByStatus(status).stream().map(OrderResponse::from).toList();
+    public TimelineResponse timeline(UUID id) {
+        return TimelineResponse.from(find(id));
+    }
+
+    @Transactional(readOnly = true)
+    public List<OrderResponse> findByStatus(OrderStatus status, int olderThanMinutes) {
+        Instant cutoff = Instant.now().minus(Duration.ofMinutes(olderThanMinutes));
+        return orders.findByStatusAndCreatedAtBefore(status, cutoff).stream().map(OrderResponse::from).toList();
+    }
+
+    private Order find(UUID id) {
+        return orders.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order " + id + " not found"));
     }
 }

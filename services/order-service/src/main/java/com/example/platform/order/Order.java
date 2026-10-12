@@ -25,23 +25,41 @@ public class Order {
     @Column(nullable = false)
     private Instant createdAt;
 
+    @Version
+    private long version;
+
     // Inverse side: the foreign key lives in order_items.order_id (owned by OrderItem.order).
     // @OneToMany is LAZY by default: items are loaded only when first accessed.
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItem> items = new ArrayList<>();
 
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL)
+    @OrderBy("occurredAt ASC, id ASC")
+    private List<OrderStatusHistory> history = new ArrayList<>();
+
     protected Order() {
         // for JPA
     }
 
-    public Order(String customerId) {
+    /** @param createdEventId id of the order.created event that will announce this order */
+    public Order(String customerId, UUID createdEventId) {
         this.customerId = customerId;
         this.status = OrderStatus.PENDING;
         this.createdAt = Instant.now();
+        history.add(new OrderStatusHistory(this, OrderStatus.PENDING, createdEventId, OrderService.ORDER_CREATED, null));
     }
 
     public void addItem(String sku, int quantity) {
         items.add(new OrderItem(this, sku, quantity));
+    }
+
+    /** The only allowed transitions are PENDING -> CONFIRMED and PENDING -> CANCELLED. */
+    public void complete(OrderStatus newStatus, UUID eventId, String eventType, String reason) {
+        if (status != OrderStatus.PENDING || newStatus == OrderStatus.PENDING) {
+            throw new IllegalStateException("Order " + id + " cannot go from " + status + " to " + newStatus);
+        }
+        status = newStatus;
+        history.add(new OrderStatusHistory(this, newStatus, eventId, eventType, reason));
     }
 
     public UUID getId() { return id; }
@@ -49,4 +67,5 @@ public class Order {
     public OrderStatus getStatus() { return status; }
     public Instant getCreatedAt() { return createdAt; }
     public List<OrderItem> getItems() { return items; }
+    public List<OrderStatusHistory> getHistory() { return history; }
 }
