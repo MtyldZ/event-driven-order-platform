@@ -23,6 +23,11 @@ public class Stock {
         // for JPA
     }
 
+    Stock(String sku, int available) {
+        this.sku = sku;
+        this.available = available;
+    }
+
     public void reserve(int quantity) {
         if (quantity > available) {
             throw new IllegalStateException("Not enough stock for " + sku);

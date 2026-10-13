@@ -79,7 +79,7 @@ class ReservationListener {
         log.info("Order {} -> {}{}", event.orderId(), result.eventType(), rejection == null ? "" : " (" + rejection + ")");
     }
 
-    private static String findShortage(Map<String, Integer> requested, Map<String, Stock> stockBySku) {
+    static String findShortage(Map<String, Integer> requested, Map<String, Stock> stockBySku) {
         for (var entry : requested.entrySet()) {
             Stock stock = stockBySku.get(entry.getKey());
             if (stock == null) {
