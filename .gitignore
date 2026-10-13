@@ -15,3 +15,7 @@ dist/
 *.iml
 .vscode/
 .DS_Store
+
+# Personal, never committed
+LEARNING_LOG.personal.md
+AGENT_BRIEF.md

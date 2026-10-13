@@ -1,5 +1,7 @@
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { KafkaInspector, OrderEvents } from './kafkaInspector.js';
+import { KafkaInspectorError } from './kafkaInspector.js';
 import type { Order, OrderApi, Timeline } from './orderApi.js';
 import { OrderServiceError } from './orderApi.js';
 import { createServer } from './server.js';
@@ -29,12 +31,16 @@ function fakeApi(overrides: Partial<OrderApi> = {}): OrderApi & { calls: string[
   };
 }
 
+/** Kafka as seen for the stuck order: no events at all, inventory caught up. */
+const nothingOnKafka: OrderEvents = { events: [], lag: [{ groupId: 'inventory-service', topic: 'order.created', lag: 0 }], complete: true };
+const fakeKafka = (find: KafkaInspector['findOrderEvents'] = async () => nothingOnKafka): KafkaInspector => ({ findOrderEvents: find });
+
 let client: Client;
 
 /** A real MCP client talking to the real server through an in-memory pipe (no process, no stdio). */
-async function connect(api: OrderApi): Promise<Client> {
+async function connect(api: OrderApi, kafka: KafkaInspector = fakeKafka()): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await createServer(api, () => NOW).connect(serverTransport);
+  await createServer(api, kafka, () => NOW).connect(serverTransport);
   client = new Client({ name: 'test', version: '1.0.0' });
   await client.connect(clientTransport);
   return client;
@@ -48,10 +54,10 @@ afterEach(async () => {
 });
 
 describe('order-platform MCP server', () => {
-  it('advertises exactly the three read-only tools', async () => {
+  it('advertises exactly the four read-only tools', async () => {
     const { tools } = await (await connect(fakeApi())).listTools();
 
-    expect(tools.map(t => t.name).sort()).toEqual(['explain_order_timeline', 'get_order_status', 'list_stuck_orders']);
+    expect(tools.map(t => t.name).sort()).toEqual(['explain_order_timeline', 'find_order_events', 'get_order_status', 'list_stuck_orders']);
     expect(tools.every(t => t.annotations?.readOnlyHint === true)).toBe(true);
   });
 
@@ -113,5 +119,53 @@ describe('order-platform MCP server', () => {
     expect(bug.isError).toBe(true);
     expect(textOf(bug)).toBe('Internal error in the MCP server. Details are in its stderr log.');
     expect(textOf(bug)).not.toMatch(/at .*\.(ts|js):\d+|TypeError/);
+  });
+
+  it('find_order_events: no order.created on Kafka means the event was never published', async () => {
+    const result = await (await connect(fakeApi())).callTool({ name: 'find_order_events', arguments: { orderId: STUCK_ID } });
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain(`No order.created event for ${STUCK_ID} exists on Kafka: it was never published`);
+    expect(textOf(result)).toContain('dual-write gap');
+  });
+
+  it('find_order_events: points at the DLT when processing failed', async () => {
+    const inDlt: OrderEvents = {
+      events: [
+        { topic: 'order.created', partition: 2, offset: '7', timestamp: '2026-10-13T12:00:00.000Z', eventType: 'order.created', eventId: CREATED_EVENT_ID },
+        { topic: 'order.created.DLT', partition: 2, offset: '0', timestamp: '2026-10-13T12:00:08.000Z', eventType: 'order.created', eventId: CREATED_EVENT_ID },
+      ],
+      lag: [], complete: true,
+    };
+    const result = await (await connect(fakeApi(), fakeKafka(async () => inDlt))).callTool({ name: 'find_order_events', arguments: { orderId: STUCK_ID } });
+
+    expect(textOf(result)).toContain('was moved to order.created.DLT');
+  });
+
+  it('find_order_events: a lagging inventory-service is reported as not consumed yet', async () => {
+    const waiting: OrderEvents = {
+      events: [{ topic: 'order.created', partition: 0, offset: '3', timestamp: '2026-10-13T12:00:00.000Z', eventType: 'order.created', eventId: CREATED_EVENT_ID }],
+      lag: [{ groupId: 'inventory-service', topic: 'order.created', lag: 4 }], complete: true,
+    };
+    const result = await (await connect(fakeApi(), fakeKafka(async () => waiting))).callTool({ name: 'find_order_events', arguments: { orderId: STUCK_ID } });
+
+    expect(textOf(result)).toContain('inventory-service has not consumed it yet (lag 4');
+  });
+
+  it('find_order_events: an unknown order is reported as unknown, not as a lost event', async () => {
+    const result = await (await connect(fakeApi())).callTool({
+      name: 'find_order_events', arguments: { orderId: '11111111-1111-4111-8111-111111111111' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe('No order with id 11111111-1111-4111-8111-111111111111.');
+  });
+
+  it('find_order_events: Kafka down becomes a readable tool error', async () => {
+    const down = fakeKafka(async () => { throw new KafkaInspectorError('Kafka is not reachable at localhost:9092 or the inspection failed. Is the stack running?'); });
+    const result = await (await connect(fakeApi(), down)).callTool({ name: 'find_order_events', arguments: { orderId: STUCK_ID } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe('Kafka is not reachable at localhost:9092 or the inspection failed. Is the stack running?');
   });
 });

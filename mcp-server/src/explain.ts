@@ -36,7 +36,7 @@ export function explainTimeline(timeline: Timeline, now: Date): string {
     `Order ${timeline.orderId} is STUCK: PENDING for ${ageMinutes} minute(s) with no answer from inventory-service.`,
     'Missing step: an inventory.reserved or inventory.rejected event for this order.',
     eventLine,
-    'Check, in this order:',
+    'Call find_order_events to check these on Kafka directly, or check by hand, in this order:',
     `1. Was order.created published? order-service logs "Published order.created for order ${timeline.orderId}" or "Failed to publish ...". Not on the topic = dual-write gap (order saved, event lost); nothing will retry it.`,
     '2. Is inventory-service consuming? kafka-consumer-groups --describe --group inventory-service: lag > 0 without consumers = service down.',
     `3. Did processing fail? Look for key ${timeline.orderId} in order.created.DLT.`,

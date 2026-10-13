@@ -7,7 +7,8 @@
         "mcp-server/dist/index.js"
       ],
       "env": {
-        "ORDER_SERVICE_URL": "http://localhost:8081"
+        "ORDER_SERVICE_URL": "http://localhost:8081",
+        "KAFKA_BROKERS": "localhost:9092"
       }
     }
   }
