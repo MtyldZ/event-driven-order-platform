@@ -43,3 +43,25 @@ jobs:
         with:
           name: test-reports-${{ matrix.service }}
           path: services/${{ matrix.service }}/target/surefire-reports/
+
+  mcp-server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          # Caches npm's download cache, keyed on package-lock.json.
+          cache: npm
+          cache-dependency-path: mcp-server/package-lock.json
+
+      # npm ci: installs exactly what package-lock.json says (fails if it doesn't match package.json).
+      - run: npm ci
+      # tsc type-checks sources and tests, then emits dist/.
+      - run: npm run build
+      - run: npm test
