@@ -1,0 +1,45 @@
+name: CI
+
+# Every push (any branch) and every pull request.
+on:
+  push:
+  pull_request:
+
+# The default GITHUB_TOKEN may only read the repository: this workflow never needs to write.
+permissions:
+  contents: read
+
+jobs:
+  service:
+    name: ${{ matrix.service }}
+    # Pinned image, not ubuntu-latest: the runner (and its Docker) changes only when we decide.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      # One failing service must not cancel the others: we want all three results.
+      fail-fast: false
+      matrix:
+        service: [order-service, inventory-service, notification-service]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          # Caches ~/.m2/repository, keyed on this service's pom.xml.
+          cache: maven
+          cache-dependency-path: services/${{ matrix.service }}/pom.xml
+
+      # Compile, unit tests and Testcontainers integration tests (the runner has Docker).
+      - run: ./mvnw -B verify
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-${{ matrix.service }}
+          path: services/${{ matrix.service }}/target/surefire-reports/
