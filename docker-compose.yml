@@ -1,3 +1,16 @@
+# Settings every Spring service needs inside the Compose network.
+# Containers reach each other by service name; Kafka is reached on its INTERNAL listener.
+x-spring-service: &spring-service
+  environment: &spring-env
+    POSTGRES_USER: ${POSTGRES_USER:-platform}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  depends_on: &infra
+    kafka:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
 services:
   kafka:
     image: apache/kafka:4.3.1
@@ -52,6 +65,46 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  order-service:
+    <<: *spring-service
+    build:
+      context: services/order-service
+      dockerfile: ../Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      <<: *spring-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/orders_db
+      INVENTORY_BASE_URL: http://inventory-service:8082
+    # No depends_on inventory-service on purpose: the circuit breaker handles it being absent.
+
+  inventory-service:
+    <<: *spring-service
+    build:
+      context: services/inventory-service
+      dockerfile: ../Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      <<: *spring-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/inventory_db
+      SPRING_DATA_REDIS_HOST: redis
+    depends_on:
+      <<: *infra
+      redis:
+        condition: service_healthy
+
+  notification-service:
+    <<: *spring-service
+    build:
+      context: services/notification-service
+      dockerfile: ../Dockerfile
+    ports:
+      - "8083:8083"
+    environment:
+      <<: *spring-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/notifications_db
 
 volumes:
   pgdata:

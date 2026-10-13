@@ -11,7 +11,10 @@ import org.springframework.web.server.ResponseStatusException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class OrderService {
@@ -22,10 +25,12 @@ public class OrderService {
 
     private final OrderRepository orders;
     private final KafkaTemplate<String, Object> kafka;
+    private final InventoryClient inventory;
 
-    OrderService(OrderRepository orders, KafkaTemplate<String, Object> kafka) {
+    OrderService(OrderRepository orders, KafkaTemplate<String, Object> kafka, InventoryClient inventory) {
         this.orders = orders;
         this.kafka = kafka;
+        this.inventory = inventory;
     }
 
     // Deliberately NOT @Transactional: save() runs in its own transaction and commits when it returns,
@@ -33,6 +38,8 @@ public class OrderService {
     // ponytail: if Kafka is down after the commit, the order stays PENDING with no event (dual-write problem,
     // explored in Phase 6; transactional outbox is the fix).
     public OrderResponse create(CreateOrderRequest request) {
+        rejectIfObviouslyOutOfStock(request);
+
         // The event id is chosen up front so the PENDING history entry can point at the event that announces it.
         UUID eventId = UUID.randomUUID();
         Order order = new Order(request.customerId(), eventId);
@@ -50,6 +57,19 @@ public class OrderService {
             }
         });
         return OrderResponse.from(order);
+    }
+
+    // Fail fast with 422 when inventory already says "not enough". This is only a pre-check:
+    // stock can change before the async reservation, which stays the real decision.
+    private void rejectIfObviouslyOutOfStock(CreateOrderRequest request) {
+        Map<String, Integer> requested = request.items().stream()
+                .collect(Collectors.toMap(CreateOrderRequest.Item::sku, CreateOrderRequest.Item::quantity, Integer::sum, TreeMap::new));
+        requested.forEach((sku, quantity) -> inventory.availableStock(sku).ifPresent(available -> {
+            if (available < quantity) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT,
+                        "Not enough stock for %s (requested %d, available %d)".formatted(sku, quantity, available));
+            }
+        }));
     }
 
     @Transactional(readOnly = true)

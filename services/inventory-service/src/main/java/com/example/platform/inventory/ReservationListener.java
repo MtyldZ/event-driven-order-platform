@@ -6,6 +6,8 @@ import com.example.platform.inventory.Events.InventoryReserved;
 import com.example.platform.inventory.Events.OrderCreated;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
@@ -25,11 +27,14 @@ class ReservationListener {
     private final StockRepository stocks;
     private final ProcessedEventRepository processedEvents;
     private final KafkaTemplate<String, Object> kafka;
+    private final Cache stockCache;
 
-    ReservationListener(StockRepository stocks, ProcessedEventRepository processedEvents, KafkaTemplate<String, Object> kafka) {
+    ReservationListener(StockRepository stocks, ProcessedEventRepository processedEvents, KafkaTemplate<String, Object> kafka,
+                        CacheManager cacheManager) {
         this.stocks = stocks;
         this.processedEvents = processedEvents;
         this.kafka = kafka;
+        this.stockCache = cacheManager.getCache(StockService.CACHE);
     }
 
     // Like a @PostMapping method, but triggered by a Kafka record instead of an HTTP request.
@@ -59,6 +64,8 @@ class ReservationListener {
         String rejection = findShortage(requested, stockBySku);
         if (rejection == null) {
             requested.forEach((sku, quantity) -> stockBySku.get(sku).reserve(quantity));
+            // Transaction-aware cache: these evictions happen only after the DB commit succeeds.
+            requested.keySet().forEach(stockCache::evict);
         }
 
         processedEvents.save(new ProcessedEvent(event.eventId()));
