@@ -35,9 +35,10 @@ class OrderOutcomeListener {
             log.info("Duplicate event {} for order {}, skipping", event.eventId(), event.orderId());
             return;
         }
+        String reason = event.payload().reason();
         String message = "order.confirmed".equals(event.eventType())
                 ? "Your order " + event.orderId() + " is confirmed."
-                : "Your order " + event.orderId() + " was cancelled: " + event.payload().reason();
+                : "Your order " + event.orderId() + " was cancelled" + (reason != null ? ": " + reason : ".");
 
         // ponytail: "sending" = log line. A real email/SMS call would go here, ideally after commit.
         notifications.save(new Notification(event.eventId(), event.orderId(), event.payload().customerId(), event.eventType(), message));
