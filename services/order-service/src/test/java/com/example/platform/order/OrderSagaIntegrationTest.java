@@ -106,6 +106,26 @@ class OrderSagaIntegrationTest {
         });
     }
 
+    @Test
+    void lateContradictingResultIsIgnored() {
+        OrderResponse order = createOrder();
+
+        publish(InventoryResultListener.INVENTORY_RESERVED, order, Map.of());
+
+        await().atMost(Duration.ofSeconds(15)).pollInSameThread().untilAsserted(() -> {
+            assertThat(orderService.timeline(order.id()).currentStatus()).isEqualTo(OrderStatus.CONFIRMED);
+        });
+
+        publish(InventoryResultListener.INVENTORY_REJECTED, order, Map.of());
+
+        await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(5)).pollInSameThread().untilAsserted(() -> {
+            TimelineResponse timeline = orderService.timeline(order.id());
+            assertThat(timeline.currentStatus()).isEqualTo(OrderStatus.CONFIRMED);
+            assertThat(timeline.entries()).extracting(TimelineResponse.Entry::status).containsExactly(OrderStatus.PENDING, OrderStatus.CONFIRMED);
+            assertThat(eventsFor(order, InventoryResultListener.ORDER_CANCELLED)).isEmpty();
+        });
+    }
+
     private OrderResponse createOrder() {
         return orderService.create(new CreateOrderRequest("cust-test", List.of(new CreateOrderRequest.Item("SKU-1", 1))));
     }

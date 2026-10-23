@@ -31,13 +31,28 @@ class NotificationIntegrationTest {
         kafka.send("order.cancelled", orderId.toString(), event);
         kafka.send("order.cancelled", orderId.toString(), event);
 
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(messagesFor(orderId)).isEqualTo(1));
-        await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(messagesFor(orderId)).isEqualTo(1));
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(countMessagesFor(orderId)).isEqualTo(1));
+        await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(countMessagesFor(orderId)).isEqualTo(1));
         assertThat(jdbc.queryForObject("SELECT message FROM notifications WHERE order_id = ?", String.class, orderId))
                 .isEqualTo("Your order " + orderId + " was cancelled: Not enough stock for SKU-4");
     }
 
-    private int messagesFor(UUID orderId) {
+    @Test
+    void storesOneConfirmedNotification() {
+        UUID orderId = UUID.randomUUID();
+        String event = """
+                {"eventId":"%s","eventType":"order.confirmed","occurredAt":"2026-01-01T12:00:00Z","orderId":"%s",
+                 "payload":{"customerId":"cust-test","items": [{"sku":"SKU-1","quantity":1}]}}
+                """.formatted(UUID.randomUUID(), orderId);
+
+        kafka.send("order.confirmed", orderId.toString(), event);
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(countMessagesFor(orderId)).isEqualTo(1));
+        assertThat(jdbc.queryForObject("SELECT message FROM notifications WHERE order_id = ?", String.class, orderId))
+                .isEqualTo("Your order " + orderId + " is confirmed.");
+    }
+
+    private int countMessagesFor(UUID orderId) {
         return jdbc.queryForObject("SELECT count(*) FROM notifications WHERE order_id = ?", Integer.class, orderId);
     }
 }

@@ -40,6 +40,7 @@ class ReservationIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired StockRepository stocks;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired StockService stockService;
 
     // Every test gets its own SKU, so tests never see each other's stock changes.
     String sku;
@@ -123,6 +124,23 @@ class ReservationIntegrationTest {
         assertThat(available()).isEqualTo(4); // only B's reservation happened
     }
 
+    @Test
+    void orderWithAnUnknownSkuIsRejectedAndReservesNothing() {
+        var unknownSku = "NO-SUCH-SKU";
+        var items = List.of(new Item(sku, 2), new Item(unknownSku, 2));
+        var event = EventEnvelope.of(Events.ORDER_CREATED, UUID.randomUUID(), new OrderCreated("cust-test", items));
+
+        kafka.send(Events.ORDER_CREATED, event.orderId().toString(), event);
+
+        await().atMost(Duration.ofSeconds(15)).pollInSameThread().untilAsserted(() -> {
+            assertThat(resultsFor(event)).singleElement().satisfies(r -> {
+                assertThat(r.topic()).isEqualTo(Events.INVENTORY_REJECTED);
+                assertThat(r.value()).contains("Unknown SKU " + unknownSku);
+            });
+        });
+        assertThat(available()).isEqualTo(5);
+    }
+
     private EventEnvelope<OrderCreated> orderCreated(int quantity) {
         return EventEnvelope.of(Events.ORDER_CREATED, UUID.randomUUID(), new OrderCreated("cust-test", List.of(new Item(sku, quantity))));
     }
@@ -134,5 +152,18 @@ class ReservationIntegrationTest {
     private List<ConsumerRecord<String, String>> resultsFor(EventEnvelope<?> event) {
         results.poll(Duration.ofMillis(200)).forEach(received::add);
         return received.stream().filter(r -> r.key().equals(event.orderId().toString())).toList();
+    }
+
+
+    // Goes through StockService on purpose: the cache is what this test is about.
+    @Test
+    void reservationEvictsTheCachedStock() {
+        assertThat(stockService.get(sku).available()).isEqualTo(5);
+        var event = orderCreated(2);
+
+        kafka.send(Events.ORDER_CREATED, event.orderId().toString(), event);
+
+        await().atMost(Duration.ofSeconds(15)).pollInSameThread().untilAsserted(() ->
+            assertThat(stockService.get(sku).available()).isEqualTo(3));
     }
 }

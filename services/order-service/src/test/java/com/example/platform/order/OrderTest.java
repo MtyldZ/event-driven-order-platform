@@ -50,4 +50,19 @@ class OrderTest {
         assertThatThrownBy(() -> order.complete(OrderStatus.PENDING, UUID.randomUUID(), "x", null))
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    void pendingOrderCanBeCancelledWithAReason() {
+        Order order = new Order("cust-1", UUID.randomUUID());
+        UUID rejectedEventId = UUID.randomUUID();
+        String reason = "No stock";
+        order.complete(OrderStatus.CANCELLED, rejectedEventId, "inventory.rejected", reason);
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(order.getHistory()).extracting(OrderStatusHistory::getStatus).containsExactly(OrderStatus.PENDING, OrderStatus.CANCELLED);
+        assertThat(order.getHistory().getLast()).satisfies(h -> {
+            assertThat(h.getEventId()).isEqualTo(rejectedEventId);
+            assertThat(h.getReason()).isEqualTo(reason);
+        });
+    }
 }
